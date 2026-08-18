@@ -1,3 +1,21 @@
 {
-  "version": 2
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/favicon.ico",
+      "destination": "/assets/favicon.png"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/solve_roofing_payment_link.html",
+      "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/payment.html",
+      "destination": "/",
+      "permanent": true
+    }
+  ]
 }

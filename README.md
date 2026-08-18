@@ -22,4 +22,4 @@ The `ROOFING_STRIPE_*` and `ROOFING_MAKE_WEBHOOK_URL` names from the old Energy 
 npm install
 ```
 
-Deploy with Vercel. The payment page is `solve_roofing_payment_link.html` (`/` redirects there).
+Deploy with Vercel. Checkout is served at `/` (`https://deposit.solveroofing.ca/`).
