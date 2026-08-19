@@ -1,3 +1,6 @@
+import Stripe from 'stripe';
+import { cardDetailsFromBody, cardDetailsFromPaymentIntent, paymentMethodIdFromBody } from '../lib/stripe-card.js';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -25,6 +28,22 @@ export default async function handler(req, res) {
 
   const amount = Number.isFinite(Number(body.amount)) ? Number(body.amount) : 1031;
 
+  let card = cardDetailsFromBody(body);
+  const secretKey = process.env.STRIPE_SECRET_KEY || process.env.ROOFING_STRIPE_SECRET_KEY;
+  if ((!card.card_brand || !card.card_last4) && secretKey) {
+    const stripe = new Stripe(secretKey);
+    const fromStripe = await cardDetailsFromPaymentIntent(
+      stripe,
+      paymentId,
+      paymentMethodIdFromBody(body),
+    );
+    if (fromStripe.card_brand && fromStripe.card_last4) {
+      card = fromStripe;
+    }
+  } else if (!card.card_brand || !card.card_last4) {
+    console.error('STRIPE_SECRET_KEY is not configured; cannot load card brand/last4');
+  }
+
   const payload = {
     name: typeof body.name === 'string' ? body.name.trim() : '',
     email: typeof body.email === 'string' ? body.email.trim() : '',
@@ -37,7 +56,11 @@ export default async function handler(req, res) {
     currency: 'cad',
     division: 'roofing',
     payment_id: paymentId,
+    card_brand: card.card_brand,
+    card_last4: card.card_last4,
+    payment_method: card.payment_method,
     status: 'succeeded',
+    payment_status: 'succeeded',
   };
 
   try {
@@ -53,7 +76,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'Failed to send payment webhook' });
     }
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, card_brand: card.card_brand, card_last4: card.card_last4 });
   } catch (e) {
     console.error('notify-payment error:', e);
     return res.status(500).json({ error: e.message || 'Failed to send payment webhook' });
