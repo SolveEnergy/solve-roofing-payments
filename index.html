@@ -1014,6 +1014,7 @@
   let stripe;
   let elements;
   let clientSecret = '';
+  let paymentIntentId = '';
   let amountCents = 103100;
   let activeCurrency = 'cad';
   let checkoutReady = false;
@@ -1315,6 +1316,7 @@
         showBrandedPreview(intent.error || 'Stripe secret key is not configured');
         return;
       }
+      paymentIntentId = intent.paymentIntentId || '';
 
       stripe = Stripe(config.publishableKey);
 
@@ -1461,12 +1463,31 @@
     btn.disabled = true;
     document.getElementById('submit-text').textContent = 'Processing…';
 
+    const resetPayButton = () => {
+      btn.disabled = false;
+      document.getElementById('submit-text').textContent = `Complete Deposit · ${formatMoney(amountCents, activeCurrency)}`;
+    };
+
+    try {
     const submitted = await elements.submit();
     if (submitted.error) {
       showPayError(submitted.error.message);
-      btn.disabled = false;
-      document.getElementById('submit-text').textContent = `Complete Deposit · ${formatMoney(amountCents, activeCurrency)}`;
+      resetPayButton();
       return;
+    }
+
+    if (paymentIntentId) {
+      const receiptRes = await fetch(`${BASE}/api/create-payment-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentIntentId, email, name }),
+      });
+      const receipt = await receiptRes.json();
+      if (!receiptRes.ok) {
+        showPayError(receipt.error || 'Could not set the receipt email.');
+        resetPayButton();
+        return;
+      }
     }
 
     const created = await stripe.createPaymentMethod({
@@ -1475,8 +1496,7 @@
     });
     if (created.error) {
       showPayError(created.error.message);
-      btn.disabled = false;
-      document.getElementById('submit-text').textContent = `Complete Deposit · ${formatMoney(amountCents, activeCurrency)}`;
+      resetPayButton();
       return;
     }
 
@@ -1514,8 +1534,7 @@
 
     if (error) {
       showPayError(error.message);
-      btn.disabled = false;
-      document.getElementById('submit-text').textContent = `Complete Deposit · ${formatMoney(amountCents, activeCurrency)}`;
+      resetPayButton();
       return;
     }
 
@@ -1534,6 +1553,11 @@
 
     document.getElementById('success-amount').textContent = 'Your payment is being confirmed…';
     showState('success');
+    } catch (e) {
+      console.error(e);
+      showPayError(e.message || 'Payment could not be completed. Please try again.');
+      resetPayButton();
+    }
   });
 
   initCountryPicker();
