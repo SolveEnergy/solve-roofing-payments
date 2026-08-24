@@ -640,6 +640,26 @@
       font-size: 16px;
     }
 
+    #state-error.state.active {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 280px;
+      text-align: center;
+    }
+
+    .error-stripe-link {
+      color: var(--green);
+      font-weight: 600;
+      text-decoration: underline;
+    }
+
+    .error-stripe-link:hover,
+    .error-stripe-link:focus-visible {
+      color: var(--text);
+    }
+
     .btn-secondary {
       background: transparent;
       color: var(--text);
@@ -984,10 +1004,16 @@
 
     <!-- Error -->
     <div id="state-error" class="state state-center">
-      <div class="error-badge">⚠️</div>
-      <h2>Something went wrong</h2>
-      <p id="error-message">We couldn't start checkout. Please try again or contact us.</p>
-      <button class="btn btn-secondary" type="button" onclick="window.location.reload()">Try again</button>
+      <div class="eyebrow">Payment Not Completed</div>
+      <h2>Hmm, looks like we are having trouble processing your payment.</h2>
+      <p>
+        <a
+          class="error-stripe-link"
+          href="https://buy.stripe.com/6oUaEXeAh1qOdGQ7PI9Ve01"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Click here to pay directly with Stripe</a>
+      </p>
     </div>
   </main>
 
@@ -1194,6 +1220,29 @@
     el.classList.add('visible');
   }
 
+  function showPaymentFailed(detail) {
+    if (detail) console.error(detail);
+    notifyRoofingPaymentError(detail);
+    showState('error');
+  }
+
+  function isCustomerInputError(error) {
+    if (!error) return false;
+    const type = String(error.type || '');
+    if (type === 'card_error' || type === 'validation_error') return true;
+    const code = String(error.code || '');
+    return /^(incorrect_|invalid_|incomplete_|expired_card|card_declined|authentication_required|postal_code_invalid)/.test(code);
+  }
+
+  function showStripePayError(error, resetPayButton) {
+    if (isCustomerInputError(error)) {
+      showPayError((error && error.message) || 'Please check your card details and try again.');
+      if (typeof resetPayButton === 'function') resetPayButton();
+      return;
+    }
+    showPaymentFailed(error);
+  }
+
   function clearPayError() {
     const el = document.getElementById('pay-error');
     el.textContent = '';
@@ -1290,18 +1339,55 @@
     }
   }
 
+  function notifyErrorDetails(detail) {
+    if (!detail) return { error_message: 'Unexpected error', error_type: '', error_code: '' };
+    if (typeof detail === 'string') return { error_message: detail, error_type: '', error_code: '' };
+    return {
+      error_message: detail.message || String(detail),
+      error_type: detail.type || '',
+      error_code: detail.code || '',
+    };
+  }
+
+  function notifyRoofingPaymentError(detail) {
+    const data = getFormPayload();
+    const err = notifyErrorDetails(detail);
+    fetch(`${BASE}/api/notify-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: data.name || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        address: data.address || '',
+        city: data.city || '',
+        state: data.state || '',
+        postal_code: data.postal || '',
+        amount: Number.isFinite(amountCents) ? Math.round(amountCents) / 100 : 1031,
+        currency: 'cad',
+        division: 'roofing',
+        status: 'error',
+        payment_id: '',
+        error_message: err.error_message,
+        error_type: err.error_type,
+        error_code: err.error_code,
+      }),
+    }).catch((e) => {
+      console.error('Failed to send Roofing error webhook:', e);
+    });
+  }
+
   function showBrandedPreview(message) {
-    applyOrderSummary(103100, 'cad', DEFAULT_PRODUCT);
-    document.getElementById('payment-element').style.display = 'none';
-    document.getElementById('stripe-placeholder').style.display = 'block';
-    const info = document.getElementById('pay-info');
-    info.textContent = message || 'Stripe keys are not configured yet. Add STRIPE_SECRET_KEY and STRIPE_PRICE_ID in Vercel.';
-    info.classList.add('visible');
-    document.getElementById('submit-btn').disabled = true;
-    showState('pay');
+    console.error(message || 'Unable to start Stripe checkout yet.');
+    showPaymentFailed(message);
   }
 
   async function init() {
+    if (params.get('error_preview') === '1') {
+      showState('error');
+      return;
+    }
+
     const redirectStatus = params.get('redirect_status');
     if (params.get('payment_intent') && redirectStatus === 'succeeded') {
       document.getElementById('success-amount').textContent = 'Your deposit was completed successfully.';
@@ -1311,10 +1397,9 @@
       notifyRoofingPaymentSuccess(params.get('payment_intent'), saved, saved && saved.payment_method);
       return;
     }
+    let pendingPayBanner = '';
     if (params.get('payment_intent') && redirectStatus && redirectStatus !== 'succeeded') {
-      document.getElementById('error-message').textContent = 'Payment was not completed. Please try again.';
-      showState('error');
-      return;
+      pendingPayBanner = 'Payment was not completed. Please try again.';
     }
 
     const emailFromUrl = decodeParam(params.get('email') || params.get('contact_email'));
@@ -1443,6 +1528,7 @@
       checkoutReady = true;
       document.getElementById('submit-btn').disabled = false;
       showState('pay');
+      if (pendingPayBanner) showPayError(pendingPayBanner);
     } catch (e) {
       console.error(e);
       showBrandedPreview(e.message || 'Unable to start Stripe checkout yet.');
@@ -1452,7 +1538,7 @@
   document.getElementById('submit-btn').addEventListener('click', async () => {
     clearPayError();
     if (!checkoutReady || !stripe || !elements) {
-      showPayError('Stripe is not ready yet. Add your Roofing Stripe keys in Vercel, then refresh.');
+      showPaymentFailed('Stripe is not ready yet.');
       return;
     }
 
@@ -1544,8 +1630,7 @@
     }
 
     if (error) {
-      showPayError(error.message);
-      resetPayButton();
+      showStripePayError(error, resetPayButton);
       return;
     }
 
@@ -1575,12 +1660,10 @@
       return;
     }
 
-    showPayError('Payment could not be completed. Please try again.');
-    resetPayButton();
+    showPaymentFailed('Payment could not be completed.');
     } catch (e) {
       console.error(e);
-      showPayError(e.message || 'Payment could not be completed. Please try again.');
-      resetPayButton();
+      showPaymentFailed(e.message || 'Payment could not be completed.');
     }
   });
 
