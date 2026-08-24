@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     postal_code: typeof body.postal_code === 'string' ? body.postal_code.trim() : '',
     amount,
     currency: 'cad',
-    division: 'roofing',
+    'Project Type': 'roofing',
   };
 
   if (isError) {
