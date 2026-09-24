@@ -1339,13 +1339,50 @@
     }
   }
 
-  function notifyErrorDetails(detail) {
-    if (!detail) return { error_message: 'Unexpected error', error_type: '', error_code: '' };
-    if (typeof detail === 'string') return { error_message: detail, error_type: '', error_code: '' };
+  function isBrowserNetworkError(error) {
+    const message = String(error && error.message ? error.message : error || '').toLowerCase();
+    return (
+      message === 'load failed' ||
+      message === 'failed to fetch' ||
+      message.includes('networkerror') ||
+      message.includes('network request failed') ||
+      message.includes('network connection was lost') ||
+      message.includes('internet connection appears to be offline')
+    );
+  }
+
+  function checkoutFailure(error, step) {
+    const rawMessage = error && error.message ? String(error.message) : 'Unexpected error';
+    const type = (error && (error.type || error.name)) || 'Error';
+    if (isBrowserNetworkError(error)) {
+      return {
+        message: `The browser could not reach the server while ${step} (${rawMessage})`,
+        type,
+        code: 'browser_network',
+      };
+    }
     return {
-      error_message: detail.message || String(detail),
-      error_type: detail.type || '',
-      error_code: detail.code || '',
+      message: step ? `${rawMessage} while ${step}` : rawMessage,
+      type,
+      code: error && error.code ? String(error.code) : '',
+    };
+  }
+
+  async function fetchCheckout(url, options, step) {
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      throw checkoutFailure(error, step);
+    }
+  }
+
+  function notifyErrorDetails(detail) {
+    if (!detail) return { error_message: 'Unexpected error', error_type: 'Error', error_code: '' };
+    if (typeof detail === 'string') return { error_message: detail, error_type: 'Error', error_code: '' };
+    return {
+      error_message: detail.message || detail.error_message || String(detail),
+      error_type: detail.type || detail.name || 'Error',
+      error_code: detail.code || detail.error_code || '',
     };
   }
 
@@ -1421,16 +1458,25 @@
     if (postalFromUrl) document.getElementById('customer-postal').value = postalFromUrl;
 
     try {
-      const configRes = await fetch(`${BASE}/api/payment-config`);
-      const config = await configRes.json();
+      const configRes = await fetchCheckout(`${BASE}/api/payment-config`, undefined, 'loading checkout settings');
+      let config;
+      try {
+        config = await configRes.json();
+      } catch (error) {
+        throw checkoutFailure(error, 'reading the checkout settings');
+      }
       if (!configRes.ok) {
-        showBrandedPreview(config.error || 'Stripe publishable key is not configured');
+        showBrandedPreview({
+          message: config.error || 'Stripe publishable key is not configured',
+          type: 'api_error',
+          code: String(configRes.status),
+        });
         return;
       }
 
       applyOrderSummary(config.amountCents, config.currency, DEFAULT_PRODUCT);
 
-      const intentRes = await fetch(`${BASE}/api/create-payment-intent`, {
+      const intentRes = await fetchCheckout(`${BASE}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1439,10 +1485,19 @@
           job_id: jobId,
           description,
         }),
-      });
-      const intent = await intentRes.json();
+      }, 'creating the payment intent');
+      let intent;
+      try {
+        intent = await intentRes.json();
+      } catch (error) {
+        throw checkoutFailure(error, 'reading the payment intent');
+      }
       if (!intentRes.ok) {
-        showBrandedPreview(intent.error || 'Stripe secret key is not configured');
+        showBrandedPreview({
+          message: intent.error || 'Stripe secret key is not configured',
+          type: 'api_error',
+          code: String(intentRes.status),
+        });
         return;
       }
       stripe = Stripe(config.publishableKey, { locale: 'en-CA' });
@@ -1531,14 +1586,18 @@
       if (pendingPayBanner) showPayError(pendingPayBanner);
     } catch (e) {
       console.error(e);
-      showBrandedPreview(e.message || 'Unable to start Stripe checkout yet.');
+      showBrandedPreview(e || 'Unable to start Stripe checkout yet.');
     }
   }
 
   document.getElementById('submit-btn').addEventListener('click', async () => {
     clearPayError();
     if (!checkoutReady || !stripe || !elements) {
-      showPaymentFailed('Stripe is not ready yet.');
+      showPaymentFailed({
+        message: 'Stripe is not ready yet.',
+        type: 'checkout_error',
+        code: 'stripe_not_ready',
+      });
       return;
     }
 
@@ -1660,10 +1719,18 @@
       return;
     }
 
-    showPaymentFailed('Payment could not be completed.');
+    showPaymentFailed({
+      message: 'Payment could not be completed.',
+      type: 'checkout_error',
+      code: 'incomplete',
+    });
     } catch (e) {
       console.error(e);
-      showPaymentFailed(e.message || 'Payment could not be completed.');
+      showPaymentFailed(
+        isBrowserNetworkError(e)
+          ? checkoutFailure(e, 'confirming the card payment')
+          : (e || 'Payment could not be completed.')
+      );
     }
   });
 
